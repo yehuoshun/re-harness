@@ -1,0 +1,121 @@
+name: ghidra-headless
+
+# 逆向分析执行台：Ghidra headless 反编译。
+# 产物推私有库 re-results（本仓库 public，artifact 人人可见 → 默认关闭）。
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "smoke = 现场编译测试二进制；analyze = 下载 binary_url"
+        type: choice
+        options: [smoke, analyze]
+        default: smoke
+      binary_url:
+        description: "analyze 模式：目标下载直链（海外源可加 https://gh-proxy.com/ 前缀）"
+        type: string
+        required: false
+        default: ""
+      binary_name:
+        description: "保存文件名，如 target.dll"
+        type: string
+        required: false
+        default: "target.bin"
+      ghidra_version:
+        description: "Ghidra 版本"
+        type: string
+        required: false
+        default: "12.1.4"
+      max_functions:
+        description: "最多反编译函数数（0 = 全部，慎用）"
+        type: string
+        required: false
+        default: "50"
+      maxmem:
+        description: "Ghidra JVM 堆上限（必须封顶）"
+        type: string
+        required: false
+        default: "4g"
+      push_results:
+        description: "结果推私有库 re-results"
+        type: boolean
+        default: true
+      upload_artifact:
+        description: "在公开仓库留 artifact（等于公开产物，默认关）"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GHIDRA_VERSION: ${{ inputs.ghidra_version }}
+      GHIDRA_DIR: ${{ github.workspace }}/.tool/ghidra
+      OUT_DIR: ${{ github.workspace }}/out
+      PROJECT_DIR: ${{ github.workspace }}/.proj
+      TARGET: ${{ github.workspace }}/out/${{ inputs.binary_name }}
+      BINARY_NAME: ${{ inputs.binary_name }}
+      BINARY_URL: ${{ inputs.binary_url }}
+      MODE: ${{ inputs.mode }}
+      MAX_FUNCTIONS: ${{ inputs.max_functions }}
+      MAXMEM: ${{ inputs.maxmem }}
+      PUSH_RESULTS: ${{ inputs.push_results }}
+      RE_PUSH_TOKEN: ${{ secrets.RE_PUSH_TOKEN }}
+
+    steps:
+      - name: 环境自检（内存 / 磁盘）
+        run: |
+          echo "runner: $(nproc) vCPU / $(free -h | awk '/^Mem:/{print $2}') RAM / $(df -h / | awk 'NR==2{print $4}') free disk"
+          java -version 2>&1 | head -2 || true
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: 缓存 Ghidra
+        id: cache-ghidra
+        uses: actions/cache@v4
+        with:
+          path: .tool
+          key: ghidra-${{ inputs.ghidra_version }}-${{ runner.os }}
+
+      - name: 安装 Ghidra
+        if: steps.cache-ghidra.outputs.cache-hit != 'true'
+        run: bash scripts/install-ghidra.sh
+
+      - name: 取目标物
+        run: bash scripts/fetch-target.sh
+
+      - name: Ghidra headless 分析
+        run: bash scripts/run-ghidra.sh
+
+      - name: 推送产物到私有库
+        if: ${{ inputs.push_results }}
+        run: bash scripts/push-results.sh
+
+      - name: 产物摘要（只打印统计，不打内容）
+        if: always()
+        run: |
+          echo "### 分析摘要"
+          [ -f out/summary.txt ] && cat out/summary.txt || echo "无 summary"
+          echo ""
+          echo "decompiled.c 行数: $(wc -l < out/decompiled.c 2>/dev/null || echo 0)"
+          echo "strings 条数: $(wc -l < out/strings.txt 2>/dev/null || echo 0)"
+
+      - name: 上传 artifact（仅显式开启）
+        if: ${{ inputs.upload_artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: re-output-${{ github.run_number }}
+          path: out/
+          retention-days: 7
+
+      - name: 清理 runner 上的原始二进制
+        if: always()
+        run: rm -f "$TARGET" "$TARGET.sha256" 2>/dev/null || true
