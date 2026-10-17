@@ -50,7 +50,7 @@ EOF
     echo "== in-repo：从 samples 分支取样本 =="
     git fetch --depth=1 origin samples
     if [ -z "$SAMPLE_PATH" ]; then
-      SAMPLES=$(git ls-tree -r --name-only origin/samples | grep -vE '(^|/)\.(gitkeep|gitignore|README)' || true)
+      SAMPLES=$(git ls-tree -r --name-only origin/samples | grep -vE '(^|)/\.' | grep -viE '(^|/)README' || true)
       COUNT=$(echo "$SAMPLES" | grep -c . || true)
       echo "  samples 分支文件: ${COUNT} 个"
       echo "$SAMPLES" | sed 's/^/    /'
