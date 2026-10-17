@@ -1,6 +1,6 @@
 # re-harness
 
-逆向分析工具链的 **CI 执行台**：把 Ghidra headless 那套跑在 GitHub Actions 上，
+逆向分析工具链的 **CI 执行台**：把 Ghidra headless 跑在 GitHub Actions 上，
 省掉本机内存（本地沙箱只有 3.8 G，gateway 就吃掉 1.9 G）。
 
 ## 定位
@@ -8,8 +8,8 @@
 本仓库是**逆向工具链本体**（workflow + 脚本 + Ghidra 脚本），
 属于 GitHub Actions 允许的用途：与仓库关联软件的构建 / 测试 / 运行。
 
-**产物一律不进本仓库**（本仓库 public，日志与 artifact 人人可见）：
-分析结果由 workflow 推送到私有仓库 `re-results`。
+**明文产物绝不进本仓库**（本仓库 public）。流程：CI 打包 → AES 加密 →
+公开 artifact（只有密文）→ 沙箱解密 → 归档进语雀。
 
 ## 能力边界
 
@@ -32,27 +32,26 @@ Actions → `ghidra-headless` → Run workflow：
 | `ghidra_version` | 默认 `12.1.4`（与本地沙箱一致） |
 | `max_functions` | 最多反编译多少函数，`0` = 全部（慎用，大二进制会超时） |
 | `maxmem` | JVM 堆上限，默认 `4g`（**必须封顶**，Ghidra 默认按物理内存贪） |
-| `push_results` | 结果推到私有库 `re-results`（默认开） |
-| `upload_artifact` | 在公开仓库留 artifact（默认关，**开了等于公开产物**） |
 
-## 结果去哪
-
-`re-results` 私有库，每次运行一个目录：
+## 产物通道
 
 ```
-<run_number>-<binary_name>/
-├── summary.txt        # 架构 / 编译器 / 函数数 / 符号数 / sha256
-├── decompiled.c       # 反编译伪代码（截断到 max_functions）
-├── strings.txt        # 字符串抽取
-├── analyze.log        # Ghidra 完整日志
-└── meta.json          # run URL、输入参数、runner 规格
+CI（公开仓，免费 16G）
+  out/{summary.txt, decompiled.c, strings.txt, analyze.log, meta.json}
+    └─ scripts/bundle.py pack → tar.gz → AES-256-CBC + PBKDF2(200k)
+         └─ 公开 artifact: re-bundle-<N>.enc（只有密文，留 3 天）
+              └─ 沙箱 scripts/re-harness-sync.sh 拉取 + 解密（RE_BUNDLE_PASS）
+                   └─ 语雀知识库（多端同步浏览）→ 随后删除 GitHub artifact
 ```
+
+- 打包/解包是**同一个文件**（`scripts/bundle.py`），避免两套实现对不上。
+- `RE_BUNDLE_PASS`：32 字节随机密码，存沙箱 `credentials.env` + 本仓 secret。
+- 目标二进制**永不入库、永不上传**，job 结束前在 runner 上删除。
 
 ## 安全
 
-- `RE_PUSH_TOKEN`：repo 范围 PAT，只用于推 `re-results`。公开仓库的 secret 只注入
-  `workflow_dispatch`（本 workflow 无 `pull_request` 触发），且仓库已开
-  "Require approval for all outside collaborators"。
-- **不要往公开仓库 echo 任何 token**；workflow 里只走 env。
+- 本仓只依赖 `RE_BUNDLE_PASS`（对称密码）+ 加密 artifact，**不放账号级 API token**。
+- 语雀写入由沙箱侧 MCP 完成（不在 CI 里直连语雀 API）。
+- 公开仓 secret 只注入 `workflow_dispatch`（本 workflow 无 `pull_request` 触发）。
+- **不要在任何 workflow 里 echo token/密码**。
 - 目标物合法性自负：只分析自有 / 开源 / 已授权样本。
-- 只推分析产物，**不推原始二进制**。

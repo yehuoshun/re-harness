@@ -1,7 +1,8 @@
 name: ghidra-headless
 
 # 逆向分析执行台：Ghidra headless 反编译。
-# 产物推私有库 re-results（本仓库 public，artifact 人人可见 → 默认关闭）。
+# 本仓库 public（免费 runner 4vCPU/16G），所以产物一律【加密】后作为 artifact 上传，
+# 由沙箱侧解密再入语雀。明文产物绝不落到公开 artifact。
 on:
   workflow_dispatch:
     inputs:
@@ -35,14 +36,6 @@ on:
         type: string
         required: false
         default: "4g"
-      push_results:
-        description: "结果推私有库 re-results"
-        type: boolean
-        default: true
-      upload_artifact:
-        description: "在公开仓库留 artifact（等于公开产物，默认关）"
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -63,14 +56,12 @@ jobs:
       MODE: ${{ inputs.mode }}
       MAX_FUNCTIONS: ${{ inputs.max_functions }}
       MAXMEM: ${{ inputs.maxmem }}
-      PUSH_RESULTS: ${{ inputs.push_results }}
-      RE_PUSH_TOKEN: ${{ secrets.RE_PUSH_TOKEN }}
+      RE_BUNDLE_PASS: ${{ secrets.RE_BUNDLE_PASS }}
 
     steps:
       - name: 环境自检（内存 / 磁盘）
         run: |
           echo "runner: $(nproc) vCPU / $(free -h | awk '/^Mem:/{print $2}') RAM / $(df -h / | awk 'NR==2{print $4}') free disk"
-          java -version 2>&1 | head -2 || true
 
       - uses: actions/checkout@v4
 
@@ -96,9 +87,12 @@ jobs:
       - name: Ghidra headless 分析
         run: bash scripts/run-ghidra.sh
 
-      - name: 推送产物到私有库
-        if: ${{ inputs.push_results }}
-        run: bash scripts/push-results.sh
+      - name: 打包并加密产物
+        run: |
+          pip install --quiet cryptography
+          mkdir -p bundle
+          python3 scripts/bundle.py pack out bundle/re-bundle.enc
+          ls -lh bundle/
 
       - name: 产物摘要（只打印统计，不打内容）
         if: always()
@@ -109,14 +103,16 @@ jobs:
           echo "decompiled.c 行数: $(wc -l < out/decompiled.c 2>/dev/null || echo 0)"
           echo "strings 条数: $(wc -l < out/strings.txt 2>/dev/null || echo 0)"
 
-      - name: 上传 artifact（仅显式开启）
-        if: ${{ inputs.upload_artifact }}
+      - name: 上传加密产物（artifact 里只有密文）
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: re-output-${{ github.run_number }}
-          path: out/
-          retention-days: 7
+          name: re-bundle-${{ github.run_number }}
+          path: bundle/re-bundle.enc
+          retention-days: 3
+          if-no-files-found: warn
 
-      - name: 清理 runner 上的原始二进制
+      - name: 清理 runner 上的明文（目标物 + 明文产物）
         if: always()
-        run: rm -f "$TARGET" "$TARGET.sha256" 2>/dev/null || true
+        run: |
+          rm -rf "$OUT_DIR" "$TARGET" "$TARGET.sha256" "$GITHUB_WORKSPACE/ghidra_proj" 2>/dev/null || true
