@@ -55,8 +55,9 @@ jobs:
       GHIDRA_VERSION: ${{ inputs.ghidra_version }}
       GHIDRA_DIR: ${{ github.workspace }}/.tool/ghidra
       OUT_DIR: ${{ github.workspace }}/out
-      PROJECT_DIR: ${{ github.workspace }}/.proj
-      TARGET: ${{ github.workspace }}/out/${{ inputs.binary_name }}
+      # 注意：Ghidra 工程路径不允许以 '.' 开头的路径段
+      PROJECT_DIR: ${{ github.workspace }}/ghidra_proj
+      TARGET: ${{ github.workspace }}/target/${{ inputs.binary_name }}
       BINARY_NAME: ${{ inputs.binary_name }}
       BINARY_URL: ${{ inputs.binary_url }}
       MODE: ${{ inputs.mode }}

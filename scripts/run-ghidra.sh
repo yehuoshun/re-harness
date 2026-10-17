@@ -23,6 +23,7 @@ set +e
   -import "$TARGET" \
   -scriptPath "$GITHUB_WORKSPACE/ghidra_scripts" \
   -postScript DumpDecomp.java "$OUT" "$MAXF" \
+  -analysisTimeoutPerFile 900 \
   -deleteProject 2>&1 | tee "$OUT/analyze.log"
 RC=${PIPESTATUS[0]}
 set -e

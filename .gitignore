@@ -1,5 +1,7 @@
 .tool/
 .proj/
+ghidra_proj/
 out/
+target/
 tmp/
 *.log
