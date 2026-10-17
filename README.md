@@ -48,6 +48,13 @@ CI（公开仓，免费 16G）
 - `RE_BUNDLE_PASS`：32 字节随机密码，存沙箱 `credentials.env` + 本仓 secret。
 - 目标二进制**永不入库、永不上传**，job 结束前在 runner 上删除。
 
+## 使用约束（2026-10-18 拍板）
+
+- **按需手动触发**（`workflow_dispatch`），一次一个目标，**不做长任务**。
+- 不加 `schedule`、不做批量 matrix、不堆并行——本仓定位是「单次分析执行台」，不是算力农场。
+- 单次任务 `timeout-minutes: 90` 封顶，超时即终止。
+- 目标物以**自有 / 开源 / 已授权**为主；闭源标的走私有仓 + 计费分钟，或不用 GitHub。
+
 ## 安全
 
 - 本仓只依赖 `RE_BUNDLE_PASS`（对称密码）+ 加密 artifact，**不放账号级 API token**。
