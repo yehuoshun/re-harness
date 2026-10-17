@@ -3,24 +3,32 @@ name: ghidra-headless
 # 逆向分析执行台：Ghidra headless 反编译。
 # 本仓库 public（免费 runner 4vCPU/16G），所以产物一律【加密】后作为 artifact 上传，
 # 由沙箱侧解密再入语雀。明文产物绝不落到公开 artifact。
+#
+# 样本投递：老板手动上传到 `samples` 分支（不进 main 历史），
+# 分析成功 → 删除 samples 分支并重建空白分支（彻底清掉样本）。
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "smoke = 现场编译测试二进制；analyze = 下载 binary_url"
+        description: "smoke = 编译测试二进制；analyze = 下载 binary_url；in-repo = 分析 samples 分支里的样本"
         type: choice
-        options: [smoke, analyze]
-        default: smoke
+        options: [smoke, analyze, in-repo]
+        default: in-repo
+      sample_path:
+        description: "in-repo：样本在 samples 分支里的路径（留空 = 自动取唯一的文件）"
+        type: string
+        required: false
+        default: ""
       binary_url:
         description: "analyze 模式：目标下载直链（海外源可加 https://gh-proxy.com/ 前缀）"
         type: string
         required: false
         default: ""
       binary_name:
-        description: "保存文件名，如 target.dll"
+        description: "保存文件名，如 target.dll（in-repo 留空即用样本原名）"
         type: string
         required: false
-        default: "target.bin"
+        default: ""
       ghidra_version:
         description: "Ghidra 版本"
         type: string
@@ -38,7 +46,7 @@ on:
         default: "4g"
 
 permissions:
-  contents: read
+  contents: write   # 分析完成后需要删/重建 samples 分支
 
 jobs:
   analyze:
@@ -50,10 +58,10 @@ jobs:
       OUT_DIR: ${{ github.workspace }}/out
       # 注意：Ghidra 工程路径不允许以 '.' 开头的路径段
       PROJECT_DIR: ${{ github.workspace }}/ghidra_proj
-      TARGET: ${{ github.workspace }}/target/${{ inputs.binary_name }}
       BINARY_NAME: ${{ inputs.binary_name }}
       BINARY_URL: ${{ inputs.binary_url }}
       MODE: ${{ inputs.mode }}
+      SAMPLE_PATH: ${{ inputs.sample_path }}
       MAX_FUNCTIONS: ${{ inputs.max_functions }}
       MAXMEM: ${{ inputs.maxmem }}
       RE_BUNDLE_PASS: ${{ secrets.RE_BUNDLE_PASS }}
@@ -69,6 +77,23 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
+
+      - name: 计算目标文件名
+        run: |
+          if [ -z "${BINARY_NAME}" ]; then
+            if [ "${MODE}" = "in-repo" ]; then
+              # 从 samples 分支推断（SAMPLE_PATH 为空时取唯一文件）
+              git fetch --depth=1 origin samples
+              P="${SAMPLE_PATH:-$(git ls-tree -r --name-only origin/samples | grep -vE '(^|/)\.(gitkeep|gitignore|README)' | head -1)}"
+            else
+              P="${BINARY_URL##*/}"
+              P="${P%%\?*}"
+            fi
+          else
+            P="${BINARY_NAME}"
+          fi
+          echo "TARGET=${GITHUB_WORKSPACE}/target/${P}" >> "$GITHUB_ENV"
+          echo "目标文件名: ${P}"
 
       - name: 缓存 Ghidra
         id: cache-ghidra
@@ -88,6 +113,7 @@ jobs:
         run: bash scripts/run-ghidra.sh
 
       - name: 打包并加密产物
+        if: always()
         run: |
           pip install --quiet cryptography
           mkdir -p bundle
@@ -112,7 +138,14 @@ jobs:
           retention-days: 3
           if-no-files-found: warn
 
+      # 只在分析成功后才清样本；失败保留，方便重试
+      - name: 清样本（删 samples 分支并重建）
+        if: ${{ success() && inputs.mode == 'in-repo' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/cleanup-sample.sh
+
       - name: 清理 runner 上的明文（目标物 + 明文产物）
         if: always()
         run: |
-          rm -rf "$OUT_DIR" "$TARGET" "$TARGET.sha256" "$GITHUB_WORKSPACE/ghidra_proj" 2>/dev/null || true
+          rm -rf "$OUT_DIR" "$TARGET" "$TARGET.sha256" "$GITHUB_WORKSPACE/ghidra_proj" "$GITHUB_WORKSPACE/target" 2>/dev/null || true

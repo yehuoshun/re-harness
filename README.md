@@ -26,7 +26,8 @@ Actions → `ghidra-headless` → Run workflow：
 
 | 输入 | 说明 |
 |---|---|
-| `mode` | `smoke` = 现场编译一个测试二进制验证管线；`analyze` = 下载 `binary_url` 分析 |
+| `mode` | `in-repo` = 分析 `samples` 分支里手动上传的样本（常规）；`analyze` = 下载 `binary_url`；`smoke` = 现场编译测试二进制验证管线 |
+| `sample_path` | `in-repo`：样本在 `samples` 分支里的路径（留空 = 自动取唯一文件） |
 | `binary_url` | `analyze` 模式必填，直链（海外源建议带 `https://gh-proxy.com/` 前缀） |
 | `binary_name` | 保存文件名，如 `target.dll` |
 | `ghidra_version` | 默认 `12.1.4`（与本地沙箱一致） |
@@ -47,6 +48,16 @@ CI（公开仓，免费 16G）
 - 打包/解包是**同一个文件**（`scripts/bundle.py`），避免两套实现对不上。
 - `RE_BUNDLE_PASS`：32 字节随机密码，存沙箱 `credentials.env` + 本仓 secret。
 - 目标二进制**永不入库、永不上传**，job 结束前在 runner 上删除。
+
+## 样本投递（常规路径）
+
+1. 在 GitHub 上切到 **`samples` 分支** → Add file → Upload files → 拖入**一个**样本 → commit。
+2. Actions → `ghidra-headless` → Run workflow → `mode=in-repo`。
+3. 分析成功 → workflow 自动删除 `samples` 分支并重建一个空白分支（样本对象变孤儿，GitHub GC 后消失）。
+   分析失败 → 样本保留，便于重试。
+
+> `samples` 是孤儿分支，与 main 无共同历史 → 样本永远不进 main。
+> 每次只放一个文件（多于一个会直接报错退出）。
 
 ## 使用约束（2026-10-18 拍板）
 
