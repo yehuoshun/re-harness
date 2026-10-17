@@ -80,18 +80,23 @@ jobs:
 
       - name: 计算目标文件名
         run: |
-          if [ -z "${BINARY_NAME}" ]; then
-            if [ "${MODE}" = "in-repo" ]; then
-              # 从 samples 分支推断（SAMPLE_PATH 为空时取唯一文件）
-              git fetch --depth=1 origin samples
-              P="${SAMPLE_PATH:-$(git ls-tree -r --name-only origin/samples | grep -vE '(^|)/\.' | grep -viE '(^|/)README' | head -1)}"
-            else
-              P="${BINARY_URL##*/}"
-              P="${P%%\?*}"
-            fi
-          else
-            P="${BINARY_NAME}"
+          P="${BINARY_NAME}"
+          if [ -z "$P" ]; then
+            case "${MODE}" in
+              in-repo)
+                git fetch --depth=1 origin samples
+                P="${SAMPLE_PATH:-$(git ls-tree -r --name-only origin/samples | grep -vE '(^|)/\.' | grep -viE '(^|/)README' | head -1)}"
+                ;;
+              smoke)
+                P="smoke_target.bin"
+                ;;
+              *)
+                P="${BINARY_URL##*/}"; P="${P%%\?*}"
+                [ -n "$P" ] || P="target.bin"
+                ;;
+            esac
           fi
+          [ -n "$P" ] || { echo "❌ 推不出目标文件名"; exit 1; }
           echo "TARGET=${GITHUB_WORKSPACE}/target/${P}" >> "$GITHUB_ENV"
           echo "目标文件名: ${P}"
 
