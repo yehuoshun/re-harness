@@ -1,0 +1,120 @@
+name: wayback-fetch
+
+# 抓 web.archive.org 快照（本机被墙时用 runner 出口）
+# 输入 seed：书的「内容页」快照 URL（形如 https://web.archive.org/web/<ts>id_/http://...）
+# 脚本会顺 seed 页里的书内链接把「章节页 + 正文页」全部抓下来打包
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "seed wayback url (含 /web/<ts>id_/ 前缀)"
+        required: true
+      host:
+        description: "书站 host（默认 www.nowamagic.net）"
+        required: false
+        default: "www.nowamagic.net"
+      artifact:
+        description: "artifact 名称"
+        required: false
+        default: "wayback-out"
+      max_pages:
+        description: "正文页最多抓多少"
+        required: false
+        default: "300"
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: fetch snapshots
+        env:
+          SEED: ${{ inputs.seed }}
+          HOST: ${{ inputs.host }}
+          MAX_PAGES: ${{ inputs.max_pages }}
+        run: |
+          python3 -u - <<'PY'
+          import os, re, json, time, urllib.request, urllib.error
+
+          SEED = os.environ["SEED"]
+          HOST = os.environ.get("HOST") or "www.nowamagic.net"
+          MAX = int(os.environ.get("MAX_PAGES") or 300)
+          OUT = "out"; os.makedirs(OUT, exist_ok=True)
+          UA = {"User-Agent": "Mozilla/5.0 (wayback-fetch)"}
+
+          m = re.match(r"^(https?://web\.archive\.org/web/([0-9]+[a-z_]*)/)(.*)$", SEED)
+          if not m:
+              print("seed 格式不对，需要 /web/<ts>id_/http://...", SEED); raise SystemExit(1)
+          PREFIX, TS, ORIG = m.group(1), m.group(2), m.group(3)
+          print("prefix", PREFIX, "orig", ORIG, flush=True)
+
+          def wb(path_or_url):
+              if path_or_url.startswith("http"):
+                  return PREFIX + path_or_url
+              return PREFIX + f"http://{HOST}{path_or_url}"
+
+          def get(url, tries=4, timeout=90):
+              last = None
+              for i in range(tries):
+                  try:
+                      with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=timeout) as r:
+                          return r.geturl(), r.read()
+                  except urllib.error.HTTPError as e:
+                      last = f"HTTP {e.code}"
+                      if e.code in (429, 500, 502, 503, 504, 520, 522):
+                          time.sleep(5 * (i + 1)); continue
+                      return None, None
+                  except Exception as e:
+                      last = repr(e); time.sleep(4 * (i + 1))
+              print("  give up", url, last, flush=True)
+              return None, None
+
+          fin, body = get(SEED)
+          if not body: print("seed failed"); raise SystemExit(1)
+          open(f"{OUT}/00-seed.html", "wb").write(body)
+          html = body.decode("utf-8", "replace")
+          print("seed ok", len(body), "->", fin, flush=True)
+
+          chapter_paths = sorted(set(re.findall(r"/librarys/books/c/\d+", html)), key=lambda x: int(x.rsplit("/", 1)[1]))
+          post_ids = set(re.findall(r"/librarys/posts/c/(\d+)", html))
+          print("chapters", chapter_paths, "seed posts", len(post_ids), flush=True)
+
+          for cp in chapter_paths:
+              time.sleep(1.0)
+              fin, b = get(wb(cp))
+              if not b:
+                  print("chapter fail", cp, flush=True); continue
+              hh = b.decode("utf-8", "replace")
+              open(f"{OUT}/chapter-{cp.rsplit('/',1)[1]}.html", "w").write(hh)
+              ids = set(re.findall(r"/librarys/posts/c/(\d+)", hh))
+              post_ids |= ids
+              print("chapter", cp, len(b), "posts", len(ids), flush=True)
+
+          ids = sorted(post_ids, key=int)[:MAX]
+          print("total post ids", len(post_ids), "fetching", len(ids), flush=True)
+          meta = {}; ok = 0
+          for pid in ids:
+              time.sleep(1.0)
+              fin, b = get(wb(f"/librarys/posts/c/{pid}"))
+              if not b:
+                  meta[pid] = {"ok": False}; continue
+              open(f"{OUT}/post-{pid}.html", "wb").write(b)
+              mm = re.search(r"<title>(.*?)</title>", b.decode("utf-8", "replace"), re.S)
+              meta[pid] = {"ok": True, "size": len(b), "title": (mm.group(1).strip() if mm else ""), "final": fin}
+              ok += 1
+              if ok % 10 == 0: print("  fetched", ok, flush=True)
+
+          json.dump({"seed": ORIG, "chapters": chapter_paths, "posts": meta},
+                    open(f"{OUT}/manifest.json", "w"), ensure_ascii=False, indent=1)
+          print("DONE ok", ok, "of", len(ids), flush=True)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact }}
+          path: out/
+          retention-days: 7
+          if-no-files-found: error
