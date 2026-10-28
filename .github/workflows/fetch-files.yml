@@ -1,0 +1,60 @@
+name: fetch-files
+
+# 用 runner 出口按 URL 列表抓文件（本机被墙时用）
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "URL 列表，逗号分隔"
+        required: true
+      artifact:
+        description: "artifact 名称"
+        required: false
+        default: "files-out"
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: download
+        env:
+          URLS: ${{ inputs.urls }}
+        run: |
+          python3 -u - <<'PY'
+          import os, re, time, urllib.request, urllib.error, hashlib, json
+          os.makedirs("out", exist_ok=True)
+          urls = [u.strip() for u in os.environ["URLS"].split(",") if u.strip()]
+          UA = {"User-Agent": "Mozilla/5.0 (fetch-files)"}
+          meta = []
+          for i, u in enumerate(urls):
+              ok = False
+              for t in range(4):
+                  try:
+                      with urllib.request.urlopen(urllib.request.Request(u, headers=UA), timeout=90) as r:
+                          data = r.read()
+                          m = re.search(r"\.([a-zA-Z0-9]{2,5})(?:\?|$)", u)
+                          ext = (m.group(1) if m else "bin").lower()
+                          name = f"{i:02d}-{hashlib.md5(u.encode()).hexdigest()[:8]}.{ext}"
+                          open(f"out/{name}", "wb").write(data)
+                          meta.append({"url": u, "file": name, "size": len(data), "final": r.geturl()})
+                          print("ok", u, len(data), flush=True); ok = True
+                          break
+                  except urllib.error.HTTPError as e:
+                      print("http", e.code, u, flush=True); time.sleep(4 * (t + 1))
+                  except Exception as e:
+                      print("err", repr(e), u, flush=True); time.sleep(4 * (t + 1))
+              if not ok:
+                  meta.append({"url": u, "file": None})
+          json.dump(meta, open("out/manifest.json", "w"), ensure_ascii=False, indent=1)
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact }}
+          path: out/
+          retention-days: 7
+          if-no-files-found: error
