@@ -57,7 +57,7 @@ jobs:
                   ext = "htm"
                   mm = re.search(r"\.([a-zA-Z0-9]{2,5})(?:\?|$)", orig)
                   if mm: ext = mm.group(1).lower()
-                  name = f"{i:04d}-{ts}-{hashlib.md5(orig.encode())[:10].hexdigest()}.{ext}"
+                  name = f"{i:04d}-{ts}-{hashlib.md5(orig.encode()).hexdigest()[:10]}.{ext}"
                   open(f"out/{name}", "wb").write(data)
                   meta.append({"i": i, "ts": ts, "url": orig, "file": name, "size": len(data), "final": fin})
                   print(f"ok {i} {orig[:80]} {len(data)}", flush=True)
